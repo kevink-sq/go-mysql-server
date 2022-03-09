@@ -30,46 +30,53 @@ func resolveVariables(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (
 	span, ctx := ctx.Span("resolve_variables")
 	defer span.Finish()
 
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
-		if n.Resolved() {
-			return n, nil
+	return plan.TransformUp(n, func(node sql.Node) (sql.Node, bool, error) {
+		if node.Resolved() {
+			return node, false, nil
 		}
 
-		resolveVars := func(e sql.Expression) (sql.Expression, error) {
+		resolveVars := func(e sql.Expression) (sql.Expression, bool, error) {
 			uc, ok := e.(column)
 			if !ok || e.Resolved() {
-				return e, nil
+				return e, false, nil
 			}
 
 			expr, ok, err := resolveSystemOrUserVariable(ctx, a, uc)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if ok {
-				return expr, nil
+				return expr, true, nil
 			}
 
-			return e, nil
+			return e, false, nil
 		}
 
 		// Set nodes need to resolve the right-hand side of an expression only
-		if n, ok := n.(*plan.Set); ok {
-			return plan.TransformExpressionsUp(n, func(e sql.Expression) (sql.Expression, error) {
+		if n, ok := node.(*plan.Set); ok {
+			n, err := plan.TransformExpressionsUpWithNode(n, func(_ sql.Node, e sql.Expression) (sql.Expression, bool, error) {
 				sf, ok := e.(*expression.SetField)
 				if !ok {
-					return e, nil
+					return e, false, nil
 				}
 
-				nr, err := expression.TransformUp(sf.Right, resolveVars)
+				nr, mod, err := expression.TransformUpHelper(sf.Right, resolveVars)
 				if err != nil {
-					return nil, err
+					return nil, false, err
 				}
 
-				return sf.WithChildren(sf.Left, nr)
+				if mod {
+					e, err = sf.WithChildren(sf.Left, nr)
+					if err != nil {
+						return nil, false, err
+					}
+				}
+				return e, mod, nil
 			})
+			return n, true, err
 		}
 
-		return plan.TransformExpressionsUp(n, resolveVars)
+		return plan.TransformExpressionsForNode(node, resolveVars)
 	})
 }
 
@@ -77,55 +84,55 @@ func resolveVariables(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (
 // left-hand side, and evaluate the right-hand side where possible, including filling in defaults. Also validates that
 // system variables are known to the system.
 func resolveSetVariables(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.Node, error) {
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		_, ok := n.(*plan.Set)
 		if !ok || n.Resolved() {
-			return n, nil
+			return n, false, nil
 		}
 
-		return plan.TransformExpressionsUp(n, func(e sql.Expression) (sql.Expression, error) {
+		return plan.TransformExpressionsWithNode(n, func(_ sql.Node, e sql.Expression) (sql.Expression, bool, error) {
 			sf, ok := e.(*expression.SetField)
 			if !ok {
-				return e, nil
+				return e, false, nil
 			}
 
 			setExpr := sf.Left
 			varName := sf.Left.String()
 			setVal, err := getSetVal(ctx, varName, sf.Right)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 
 			if _, ok := sf.Left.(*expression.UnresolvedColumn); ok {
 				var scope sqlparser.SetScope
 				varName, scope, err = sqlparser.VarScope(varName)
 				if err != nil {
-					return nil, err
+					return nil, false, err
 				}
 
 				switch scope {
 				case sqlparser.SetScope_None:
-					return sf, nil
+					return sf, false, nil
 				case sqlparser.SetScope_Global:
 					_, _, ok = sql.SystemVariables.GetGlobal(varName)
 					if !ok {
-						return nil, sql.ErrUnknownSystemVariable.New(varName)
+						return nil, false, sql.ErrUnknownSystemVariable.New(varName)
 					}
 					setExpr = expression.NewSystemVar(varName, sql.SystemVariableScope_Global)
 				case sqlparser.SetScope_Persist:
-					return nil, sql.ErrUnsupportedFeature.New("PERSIST")
+					return nil, false, sql.ErrUnsupportedFeature.New("PERSIST")
 				case sqlparser.SetScope_PersistOnly:
-					return nil, sql.ErrUnsupportedFeature.New("PERSIST_ONLY")
+					return nil, false, sql.ErrUnsupportedFeature.New("PERSIST_ONLY")
 				case sqlparser.SetScope_Session:
 					_, err = ctx.GetSessionVariable(ctx, varName)
 					if err != nil {
-						return nil, err
+						return nil, false, err
 					}
 					setExpr = expression.NewSystemVar(varName, sql.SystemVariableScope_Session)
 				case sqlparser.SetScope_User:
 					setExpr = expression.NewUserVar(varName)
 				default: // shouldn't happen
-					return nil, fmt.Errorf("unknown set scope %v", scope)
+					return nil, false, fmt.Errorf("unknown set scope %v", scope)
 				}
 			}
 
@@ -139,12 +146,16 @@ func resolveSetVariables(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope
 					}
 				}
 			}
-			if _, ok := setExpr.(*expression.SystemVar); ok {
-				return sf.WithChildren(setExpr, setVal)
-			} else if _, ok := setExpr.(*expression.UserVar); ok {
-				return sf.WithChildren(setExpr, setVal)
+			switch setExpr.(type) {
+			case *expression.SystemVar, *expression.UserVar:
+				e, err = sf.WithChildren(setExpr, setVal)
+				if err != nil {
+					return nil, false, err
+				}
+				return e, true, nil
+			default:
+				return sf, false, nil
 			}
-			return sf, nil
 		})
 	})
 }
@@ -158,15 +169,15 @@ func resolveBarewordSetVariables(ctx *sql.Context, a *Analyzer, n sql.Node, scop
 		return n, nil
 	}
 
-	return plan.TransformExpressionsUp(n, func(e sql.Expression) (sql.Expression, error) {
+	return plan.TransformExpressionsUp(n, func(e sql.Expression) (sql.Expression, bool, error) {
 		sf, ok := e.(*expression.SetField)
 		if !ok {
-			return e, nil
+			return e, false, nil
 		}
 
 		setVal, err := getSetVal(ctx, sf.Left.String(), sf.Right)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 
 		// If this column expression was deferred, it means that it wasn't prefixed with @@ and can't be found in any table.
@@ -175,7 +186,7 @@ func resolveBarewordSetVariables(ctx *sql.Context, a *Analyzer, n sql.Node, scop
 			varName := uc.String()
 			_, _, ok = sql.SystemVariables.GetGlobal(varName)
 			if !ok {
-				return sf, nil
+				return sf, false, nil
 			}
 
 			// Special case: for system variables, MySQL allows naked strings (without quotes), which get interpreted as
@@ -187,10 +198,14 @@ func resolveBarewordSetVariables(ctx *sql.Context, a *Analyzer, n sql.Node, scop
 				}
 			}
 
-			return sf.WithChildren(expression.NewSystemVar(varName, sql.SystemVariableScope_Session), setVal)
+			e, err = sf.WithChildren(expression.NewSystemVar(varName, sql.SystemVariableScope_Session), setVal)
+			if err != nil {
+				return nil, false, err
+			}
+			return e, true, nil
 		}
 
-		return sf, nil
+		return sf, false, nil
 	})
 }
 

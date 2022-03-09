@@ -25,50 +25,57 @@ import (
 // (currently in expression.UnresolvedFunction instances), and 4) replace the plan.NamedWindows
 // node with its child *plan.Window.
 func replaceNamedWindows(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.Node, error) {
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		switch n.(type) {
 		case *plan.NamedWindows:
 			wn, ok := n.(*plan.NamedWindows)
 			if !ok {
-				return n, nil
+				return n, false, nil
 			}
 
 			window, ok := wn.Child.(*plan.Window)
 			if !ok {
-				return n, nil
+				return n, false, nil
 			}
 
 			err := checkCircularWindowDef(wn.WindowDefs)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 
 			// find and replace over expressions with new window definitions
 			// over sql.Windows are in unresolved aggregation functions
 			newExprs := make([]sql.Expression, len(window.SelectExprs))
+			var mod bool
 			for i, expr := range window.SelectExprs {
-				newExprs[i], err = expression.TransformUp(expr, func(e sql.Expression) (sql.Expression, error) {
+				newExprs[i], err = expression.TransformUp(expr, func(e sql.Expression) (sql.Expression, bool, error) {
 					uf, ok := e.(*expression.UnresolvedFunction)
 					if !ok {
-						return e, nil
+						return e, false, nil
 					}
 					if uf.Window == nil {
-						return e, nil
+						return e, false, nil
 					}
-					newWindow, err := resolveWindowDef(uf.Window, wn.WindowDefs)
+					newWindow, modified, err := resolveWindowDef(uf.Window, wn.WindowDefs)
 					if err != nil {
-						return nil, err
+						return nil, false, err
 					}
-					return uf.WithWindow(newWindow), nil
+					mod = mod || modified
+					if modified {
+						return uf.WithWindow(newWindow), true, nil
+					}
+					return expr, false, nil
 				})
 				if err != nil {
-					return nil, err
+					return nil, false, err
 				}
 			}
-
-			return plan.NewWindow(newExprs, window.Child), nil
+			if mod {
+				return plan.NewWindow(newExprs, window.Child), true, nil
+			}
+			return window, false, nil
 		}
-		return n, nil
+		return n, false, nil
 	})
 }
 
@@ -105,35 +112,35 @@ func checkCircularWindowDef(windowDefs map[string]*sql.WindowDefinition) error {
 // definition.
 // A sql.WindowDef can have at most one named reference.
 // We cache merged definitions in [windowDefs] to aid subsequent lookups.
-func resolveWindowDef(n *sql.WindowDefinition, windowDefs map[string]*sql.WindowDefinition) (*sql.WindowDefinition, error) {
+func resolveWindowDef(n *sql.WindowDefinition, windowDefs map[string]*sql.WindowDefinition) (*sql.WindowDefinition, bool, error) {
 	// base case
 	if n.Ref == "" {
-		return n, nil
+		return n, false, nil
 	}
 
 	var err error
 	ref, ok := windowDefs[n.Ref]
 	if !ok {
-		return nil, sql.ErrUnknownWindowName.New(n.Ref)
+		return nil, false, sql.ErrUnknownWindowName.New(n.Ref)
 	}
 
 	// recursively resolve [n.Ref]
-	ref, err = resolveWindowDef(ref, windowDefs)
+	ref, _, err = resolveWindowDef(ref, windowDefs)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	// [n] is fully defined by its attributes merging with the named reference
 	n, err = mergeWindowDefs(n, ref)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	if n.Name != "" {
 		// cache lookup
 		windowDefs[n.Name] = n
 	}
-	return n, nil
+	return n, true, nil
 }
 
 // mergeWindowDefs combines the attributes of two window definitions or returns

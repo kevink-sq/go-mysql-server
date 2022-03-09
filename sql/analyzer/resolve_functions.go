@@ -25,35 +25,35 @@ func resolveFunctions(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (
 	span, _ := ctx.Span("resolve_functions")
 	defer span.Finish()
 
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		if n.Resolved() {
-			return n, nil
+			return n, false, nil
 		}
 
-		return plan.TransformExpressionsUp(n, resolveFunctionsInExpr(ctx, a))
+		return plan.TransformExpressionsForNode(n, resolveFunctionsInExpr(ctx, a))
 	})
 }
 
 func resolveFunctionsInExpr(ctx *sql.Context, a *Analyzer) sql.TransformExprFunc {
-	return func(e sql.Expression) (sql.Expression, error) {
+	return func(e sql.Expression) (sql.Expression, bool, error) {
 		if e.Resolved() {
-			return e, nil
+			return e, false, nil
 		}
 
 		uf, ok := e.(*expression.UnresolvedFunction)
 		if !ok {
-			return e, nil
+			return e, false, nil
 		}
 
 		n := uf.Name()
 		f, err := a.Catalog.Function(ctx, n)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 
 		rf, err := f.NewInstance(uf.Arguments)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 
 		// Because of the way that we instantiate functions, we need to pass in the window from the UnresolvedFunction
@@ -63,16 +63,16 @@ func resolveFunctionsInExpr(ctx *sql.Context, a *Analyzer) sql.TransformExprFunc
 		case sql.WindowAggregation:
 			rf, err = a.WithWindow(uf.Window)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		case sql.Aggregation:
 			rf, err = a.WithWindow(uf.Window)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 
 		a.Log("resolved function %q", n)
-		return rf, nil
+		return rf, true, nil
 	}
 }

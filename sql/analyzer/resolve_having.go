@@ -27,14 +27,14 @@ import (
 )
 
 func resolveHaving(ctx *sql.Context, a *Analyzer, node sql.Node, scope *Scope) (sql.Node, error) {
-	return plan.TransformUp(node, func(node sql.Node) (sql.Node, error) {
+	return plan.TransformUp(node, func(node sql.Node) (sql.Node, bool, error) {
 		having, ok := node.(*plan.Having)
 		if !ok {
-			return node, nil
+			return node, false, nil
 		}
 
 		if !having.Child.Resolved() {
-			return node, nil
+			return node, false, nil
 		}
 
 		originalSchema := having.Schema()
@@ -44,7 +44,7 @@ func resolveHaving(ctx *sql.Context, a *Analyzer, node sql.Node, scope *Scope) (
 			var err error
 			having, requiresProjection, err = replaceAggregations(ctx, having)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 
@@ -56,16 +56,16 @@ func resolveHaving(ctx *sql.Context, a *Analyzer, node sql.Node, scope *Scope) (
 			//  in non-strict mode)
 			having, err = pullMissingColumnsUp(having, missingCols)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			requiresProjection = true
 		}
 
 		if !requiresProjection {
-			return having, nil
+			return having, true, nil
 		}
 
-		return projectOriginalAggregation(having, originalSchema), nil
+		return projectOriginalAggregation(having, originalSchema), true, nil
 	})
 }
 
@@ -312,10 +312,10 @@ func replaceAggregations(ctx *sql.Context, having *plan.Having) (*plan.Having, b
 	// indexes after they have been pushed up. This is because some of these
 	// may have already been projected in some projection and we cannot ensure
 	// from here what the final index will be.
-	cond, err := expression.TransformUp(having.Cond, func(e sql.Expression) (sql.Expression, error) {
+	cond, err := expression.TransformUp(having.Cond, func(e sql.Expression) (sql.Expression, bool, error) {
 		agg, ok := e.(sql.Aggregation)
 		if !ok {
-			return e, nil
+			return e, false, nil
 		}
 
 		for i, expr := range groupBy.SelectedExprs {
@@ -329,7 +329,7 @@ func replaceAggregations(ctx *sql.Context, having *plan.Having) (*plan.Having, b
 					expr.Type(),
 					expr.String(),
 					expr.IsNullable(),
-				), nil
+				), true, nil
 			}
 		}
 
@@ -339,7 +339,7 @@ func replaceAggregations(ctx *sql.Context, having *plan.Having) (*plan.Having, b
 			agg.Type(),
 			agg.String(),
 			agg.IsNullable(),
-		), nil
+		), true, nil
 	})
 	if err != nil {
 		return nil, false, err
@@ -366,20 +366,20 @@ func replaceAggregations(ctx *sql.Context, having *plan.Having) (*plan.Having, b
 
 	// Now, the tokens are replaced with the actual columns, now that we know
 	// what the indexes are.
-	cond, err = expression.TransformUp(having.Cond, func(e sql.Expression) (sql.Expression, error) {
+	cond, err = expression.TransformUp(having.Cond, func(e sql.Expression) (sql.Expression, bool, error) {
 		f, ok := e.(*expression.GetField)
 		if !ok {
-			return e, nil
+			return e, false, nil
 		}
 
 		idx, ok := tokenToIdx[f.Index()]
 		if !ok {
-			return e, nil
+			return e, false, nil
 		}
 
 		idx = pushedUpColumns[idx]
 		col := newSchema[idx]
-		return expression.NewGetFieldWithTable(idx, col.Type, col.Source, col.Name, col.Nullable), nil
+		return expression.NewGetFieldWithTable(idx, col.Type, col.Source, col.Name, col.Nullable), true, nil
 	})
 	if err != nil {
 		return nil, false, err
@@ -480,7 +480,7 @@ func aggregationChildEquals(ctx *sql.Context, a, b sql.Expression) bool {
 		return true
 	})
 
-	a, err := expression.TransformUp(a, func(e sql.Expression) (sql.Expression, error) {
+	a, err := expression.TransformUp(a, func(e sql.Expression) (sql.Expression, bool, error) {
 		var table, name string
 		switch e := e.(type) {
 		case column:
@@ -494,16 +494,16 @@ func aggregationChildEquals(ctx *sql.Context, a, b sql.Expression) bool {
 		if table == "" {
 			f, ok := fieldsByName[name]
 			if !ok {
-				return e, nil
+				return e, false, nil
 			}
-			return f, nil
+			return f, true, nil
 		}
 
 		f, ok := fieldsByTableCol[tableCol{table, name}]
 		if !ok {
-			return e, nil
+			return e, false, nil
 		}
-		return f, nil
+		return f, true, nil
 	})
 	if err != nil {
 		return false

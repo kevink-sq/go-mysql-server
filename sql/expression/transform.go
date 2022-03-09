@@ -22,49 +22,65 @@ import (
 
 // TransformExprWithNodeFunc is a function that given an expression and the node that contains it, will return that
 // expression as is or transformed along with an error, if any.
-type TransformExprWithNodeFunc func(sql.Node, sql.Expression) (sql.Expression, error)
+type TransformExprWithNodeFunc func(sql.Node, sql.Expression) (sql.Expression, bool, error)
 
-// TransformUp applies a transformation function to the given expression from the
-// bottom up.
 func TransformUp(e sql.Expression, f sql.TransformExprFunc) (sql.Expression, error) {
+	newe, _, err := TransformUpHelper(e, f)
+	return newe, err
+}
+
+func TransformUpHelper(e sql.Expression, f sql.TransformExprFunc) (sql.Expression, bool, error) {
 	children := e.Children()
 	if len(children) == 0 {
-		e, err := e.WithChildren()
-		if err != nil {
-			return nil, err
-		}
 		return f(e)
 	}
 
-	newChildren := make([]sql.Expression, len(children))
-	for i, c := range children {
-		c, err := TransformUp(c, f)
+	var modC bool
+	var c sql.Expression
+	var newChildren []sql.Expression
+	var err error
+	for i := 0; i < len(children); i++ {
+		c = children[i]
+		c, modC, err = TransformUpHelper(c, f)
 		if err != nil {
-			return nil, err
+			return nil, modC, err
 		}
-		newChildren[i] = c
+		if modC {
+			if newChildren == nil {
+				newChildren = make([]sql.Expression, len(children))
+				copy(newChildren, children)
+			}
+			newChildren[i] = c
+		}
 	}
 
-	e, err := e.WithChildren(newChildren...)
+	modC = len(newChildren) > 0
+	if modC {
+		e, err = e.WithChildren(newChildren...)
+		if err != nil {
+			return nil, true, err
+		}
+	}
+
+	e, modN, err := f(e)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-
-	return f(e)
+	return e, modC || modN, nil
 }
 
 // InspectUp traverses the given tree from the bottom up, breaking if
 // stop = true. Returns a bool indicating whether traversal was interrupted.
 func InspectUp(node sql.Expression, f func(sql.Expression) bool) bool {
 	stop := errors.New("stop")
-	wrap := func(n sql.Expression) (sql.Expression, error) {
+	wrap := func(n sql.Expression) (sql.Expression, bool, error) {
 		ok := f(n)
 		if ok {
-			return nil, stop
+			return nil, false, stop
 		}
-		return n, nil
+		return n, false, nil
 	}
-	_, err := TransformUp(node, func(node sql.Expression) (sql.Expression, error) {
+	_, err := TransformUp(node, func(node sql.Expression) (sql.Expression, bool, error) {
 		return wrap(node)
 	})
 	return errors.Is(err, stop)
@@ -75,37 +91,48 @@ func InspectUp(node sql.Expression, f func(sql.Expression) bool) bool {
 // stateful expression nodes where an evaluation needs to create multiple
 // independent histories of the internal state of the expression nodes.
 func Clone(expr sql.Expression) (sql.Expression, error) {
-	return TransformUp(expr, func(e sql.Expression) (sql.Expression, error) {
-		return e, nil
+	return TransformUp(expr, func(e sql.Expression) (sql.Expression, bool, error) {
+		return e, true, nil
 	})
 }
 
 // TransformUpWithNode applies a transformation function to the given expression from the bottom up.
-func TransformUpWithNode(n sql.Node, e sql.Expression, f TransformExprWithNodeFunc) (sql.Expression, error) {
+func TransformUpWithNode(n sql.Node, e sql.Expression, f TransformExprWithNodeFunc) (sql.Expression, bool, error) {
 	children := e.Children()
 	if len(children) == 0 {
-		e, err := e.WithChildren()
-		if err != nil {
-			return nil, err
-		}
 		return f(n, e)
 	}
 
-	newChildren := make([]sql.Expression, len(children))
+	var newChildren []sql.Expression
+	var mod bool
+	var err error
 	for i, c := range children {
-		c, err := TransformUpWithNode(n, c, f)
+		c, mod, err = TransformUpWithNode(n, c, f)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		newChildren[i] = c
+		if mod {
+			if newChildren == nil {
+				newChildren = make([]sql.Expression, len(children))
+				copy(newChildren, children)
+			}
+			newChildren[i] = c
+		}
 	}
 
-	e, err := e.WithChildren(newChildren...)
+	mod = len(newChildren) > 0
+	if mod {
+		e, err = e.WithChildren(newChildren...)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+
+	e, ok, err := f(n, e)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-
-	return f(n, e)
+	return e, mod || ok, nil
 }
 
 // ExpressionToColumn converts the expression to the form that should be used in a Schema. Expressions that have Name()

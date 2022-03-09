@@ -34,25 +34,30 @@ func resolveUnions(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql
 		return n, nil
 	}
 
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
-		switch n := n.(type) {
+	return plan.TransformUp(n, func(node sql.Node) (sql.Node, bool, error) {
+		switch n := node.(type) {
 		case *plan.Union:
 			subqueryCtx, cancelFunc := ctx.NewSubContext()
 			defer cancelFunc()
 
 			left, err := a.analyzeThroughBatch(subqueryCtx, n.Left(), scope, "default-rules")
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 
 			right, err := a.analyzeThroughBatch(subqueryCtx, n.Right(), scope, "default-rules")
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 
-			return n.WithChildren(StripPassthroughNodes(left), StripPassthroughNodes(right))
+			node, err = n.WithChildren(StripPassthroughNodes(left), StripPassthroughNodes(right))
+			if err != nil {
+				return nil, false, err
+			}
+			return node, true, nil
+
 		default:
-			return n, nil
+			return n, false, nil
 		}
 	})
 }
@@ -63,25 +68,29 @@ func finalizeUnions(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sq
 		return n, nil
 	}
 
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
-		switch n := n.(type) {
+	return plan.TransformUp(n, func(node sql.Node) (sql.Node, bool, error) {
+		switch n := node.(type) {
 		case *plan.Union:
 			subqueryCtx, cancelFunc := ctx.NewSubContext()
 			defer cancelFunc()
 
 			left, err := a.analyzeStartingAtBatch(subqueryCtx, n.Left(), scope, "default-rules")
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 
 			right, err := a.analyzeStartingAtBatch(subqueryCtx, n.Right(), scope, "default-rules")
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 
-			return n.WithChildren(StripPassthroughNodes(left), StripPassthroughNodes(right))
+			node, err = n.WithChildren(StripPassthroughNodes(left), StripPassthroughNodes(right))
+			if err != nil {
+				return nil, false, err
+			}
+			return node, true, nil
 		default:
-			return n, nil
+			return n, false, nil
 		}
 	})
 }
@@ -100,11 +109,11 @@ func mergeUnionSchemas(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) 
 	if !n.Resolved() {
 		return n, nil
 	}
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		if u, ok := n.(*plan.Union); ok {
 			ls, rs := u.Left().Schema(), u.Right().Schema()
 			if len(ls) != len(rs) {
-				return nil, ErrUnionSchemasDifferentLength.New(len(ls), len(rs))
+				return nil, false, ErrUnionSchemasDifferentLength.New(len(ls), len(rs))
 			}
 			les, res := make([]sql.Expression, len(ls)), make([]sql.Expression, len(rs))
 			hasdiff := false
@@ -125,14 +134,16 @@ func mergeUnionSchemas(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) 
 				res[i] = expression.NewAlias(rs[i].Name, res[i])
 			}
 			if hasdiff {
-				return u.WithChildren(
+				n, err := u.WithChildren(
 					plan.NewProject(les, u.Left()),
 					plan.NewProject(res, u.Right()),
 				)
-			} else {
-				return u, nil
+				if err != nil {
+					return nil, false, err
+				}
+				return n, true, nil
 			}
 		}
-		return n, nil
+		return n, false, nil
 	})
 }

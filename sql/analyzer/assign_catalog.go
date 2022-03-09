@@ -32,9 +32,9 @@ func assignCatalog(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql
 	span, _ := ctx.Span("assign_catalog")
 	defer span.Finish()
 
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		if !n.Resolved() {
-			return n, nil
+			return n, false, nil
 		}
 
 		switch node := n.(type) {
@@ -42,53 +42,53 @@ func assignCatalog(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql
 			nc := *node
 			nc.Catalog = a.Catalog
 			nc.CurrentDatabase = ctx.GetCurrentDatabase()
-			return &nc, nil
+			return &nc, true, nil
 		case *plan.DropIndex:
 			nc := *node
 			nc.Catalog = a.Catalog
 			nc.CurrentDatabase = ctx.GetCurrentDatabase()
-			return &nc, nil
+			return &nc, true, nil
 		case *plan.ShowDatabases:
 			nc := *node
 			nc.Catalog = a.Catalog
-			return &nc, nil
+			return &nc, true, nil
 		case *plan.ShowProcessList:
 			nc := *node
 			nc.Database = ctx.GetCurrentDatabase()
-			return &nc, nil
+			return &nc, true, nil
 		case *plan.ShowTableStatus:
 			nc := *node
 			nc.Catalog = a.Catalog
-			return &nc, nil
+			return &nc, true, nil
 		case *plan.Use:
 			nc := *node
 			nc.Catalog = a.Catalog
-			return &nc, nil
+			return &nc, true, nil
 		case *plan.CreateDB:
 			nc := *node
 			nc.Catalog = a.Catalog
-			return &nc, nil
+			return &nc, true, nil
 		case *plan.DropDB:
 			nc := *node
 			nc.Catalog = a.Catalog
-			return &nc, nil
+			return &nc, true, nil
 		case *plan.LockTables:
 			nc := *node
 			nc.Catalog = a.Catalog
-			return &nc, nil
+			return &nc, true, nil
 		case *plan.UnlockTables:
 			nc := *node
 			nc.Catalog = a.Catalog
-			return &nc, nil
+			return &nc, true, nil
 		case *plan.ResolvedTable:
 			nc := *node
 			ct, ok := nc.Table.(CatalogTable)
 			if ok {
 				nc.Table = ct.AssignCatalog(a.Catalog)
 			}
-			return &nc, nil
+			return &nc, true, nil
 		default:
-			return n, nil
+			return n, false, nil
 		}
 	})
 }

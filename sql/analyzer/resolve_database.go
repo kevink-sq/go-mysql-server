@@ -25,16 +25,16 @@ func resolveDatabases(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (
 	span, _ := ctx.Span("resolve_database")
 	defer span.Finish()
 
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		d, ok := n.(sql.Databaser)
 		if !ok {
-			return n, nil
+			return n, false, nil
 		}
 
 		var dbName = ctx.GetCurrentDatabase()
 		if db := d.Database(); db != nil {
 			if _, ok := db.(sql.UnresolvedDatabase); !ok {
-				return n, nil
+				return n, false, nil
 			}
 
 			if db.Name() != "" {
@@ -44,15 +44,16 @@ func resolveDatabases(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (
 
 		// Nothing to resolve. This can happen if no database is current
 		if dbName == "" {
-			return n, nil
+			return n, false, nil
 		}
 
 		db, err := a.Catalog.Database(ctx, dbName)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 
-		return d.WithDatabase(db)
+		n, err = d.WithDatabase(db)
+		return n, true, err
 	})
 }
 

@@ -21,25 +21,32 @@ import (
 )
 
 func applyHashIn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.Node, error) {
-	return plan.TransformUpCtx(n, nil, func(c plan.TransformContext) (sql.Node, error) {
-		filter, ok := c.Node.(*plan.Filter)
+	return plan.TransformUp(n, func(node sql.Node) (sql.Node, bool, error) {
+		filter, ok := node.(*plan.Filter)
 		if !ok {
-			return c.Node, nil
+			return node, false, nil
 		}
 
-		e, err := expression.TransformUp(filter.Expression, func(expr sql.Expression) (sql.Expression, error) {
+		e, err := expression.TransformUp(filter.Expression, func(expr sql.Expression) (sql.Expression, bool, error) {
 			if e, ok := expr.(*expression.InTuple); ok &&
 				hasSingleOutput(e.Left()) &&
 				isStatic(e.Right()) {
-				return expression.NewHashInTuple(e.Left(), e.Right())
+				newe, err := expression.NewHashInTuple(e.Left(), e.Right())
+				if err != nil {
+					return nil, false, err
+				}
+				return newe, true, nil
 			}
-			return expr, nil
+			return expr, false, nil
 		})
-
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return filter.WithExpressions(e)
+		node, err = filter.WithExpressions(e)
+		if err != nil {
+			return nil, false, err
+		}
+		return node, true, nil
 	})
 }
 

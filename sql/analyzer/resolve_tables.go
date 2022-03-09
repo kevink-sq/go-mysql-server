@@ -52,7 +52,7 @@ func resolveTables(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql
 	span, _ := ctx.Span("resolve_tables")
 	defer span.Finish()
 
-	return plan.TransformUpCtx(n, nil, func(c plan.TransformContext) (sql.Node, error) {
+	return plan.TransformUpCtx(n, nil, func(c plan.TransformContext) (sql.Node, bool, error) {
 		ignore := false
 		switch p := c.Parent.(type) {
 		case *plan.DropTable:
@@ -67,16 +67,16 @@ func resolveTables(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql
 					resolvedTables = append(resolvedTables, t)
 				}
 			}
-			c.Node, _ = p.WithChildren(resolvedTables...)
-			return n, nil
+			newn, _ := p.WithChildren(resolvedTables...)
+			return newn, true, nil
 		case *plan.UnresolvedTable:
 			r, err := resolveTable(ctx, p, a)
 			if sql.ErrTableNotFound.Is(err) && ignore {
-				return p, nil
+				return p, false, nil
 			}
-			return r, err
+			return r, true, err
 		default:
-			return p, nil
+			return p, false, nil
 		}
 	})
 }
@@ -130,34 +130,35 @@ func setTargetSchemas(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (
 	span, _ := ctx.Span("set_target_schema")
 	defer span.Finish()
 
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		t, ok := n.(sql.SchemaTarget)
 		if !ok {
-			return n, nil
+			return n, false, nil
 		}
 
 		table := getResolvedTable(n)
 		if table == nil {
-			return n, nil
+			return n, false, nil
 		}
 
 		var err error
 		n, err = t.WithTargetSchema(table.Schema())
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 
 		pkst, ok := n.(sql.PrimaryKeySchemaTarget)
 		if !ok {
-			return n, nil
+			return n, true, nil
 		}
 
 		pkt, ok := table.Table.(sql.PrimaryKeyTable)
 		if !ok {
-			return n, nil
+			return n, true, nil
 		}
 
-		return pkst.WithPrimaryKeySchema(pkt.PrimaryKeySchema())
+		n, err = pkst.WithPrimaryKeySchema(pkt.PrimaryKeySchema())
+		return n, true, err
 	})
 }
 

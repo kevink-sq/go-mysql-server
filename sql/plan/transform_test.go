@@ -38,12 +38,12 @@ func TestTransformUp(t *testing.T) {
 	})
 	table := memory.NewTable("resolved", schema)
 
-	pt, err := TransformUp(p, func(n sql.Node) (sql.Node, error) {
+	pt, err := TransformUp(p, func(n sql.Node) (sql.Node, bool, error) {
 		switch n.(type) {
 		case *UnresolvedTable:
-			return NewResolvedTable(table, nil, nil), nil
+			return NewResolvedTable(table, nil, nil), true, nil
 		default:
-			return n, nil
+			return n, false, nil
 		}
 	})
 	require.NoError(err)

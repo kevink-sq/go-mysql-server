@@ -36,9 +36,17 @@ type TransformContext struct {
 	SchemaPrefix sql.Schema
 }
 
+type SchemaPrefixer struct {
+	// schema is just a slice of columns
+	// allocate upfront
+	// can switch out slice when one is changed?
+	cols []*sql.Column
+	i    int
+}
+
 // Transformer is a function which will return new sql.Node values for a given
 // TransformContext.
-type Transformer func(TransformContext) (sql.Node, error)
+type Transformer func(TransformContext) (sql.Node, bool, error)
 
 // TransformSelector is a function which will allow TransformUpCtx to not
 // traverse past a certain TransformContext. If this function returns |false|
@@ -46,63 +54,10 @@ type Transformer func(TransformContext) (sql.Node, error)
 // is kept in its existing place in the parent as-is.
 type TransformSelector func(TransformContext) bool
 
-// TransformUpCtx transforms |n| from the bottom up, left to right, by passing
-// each node to |f|. If |s| is non-nil, does not descend into children where
-// |s| returns false.
-func TransformUpCtx(n sql.Node, s TransformSelector, f Transformer) (sql.Node, error) {
-	return transformUpCtx(TransformContext{n, nil, -1, sql.Schema{}}, s, f)
-}
-
-func transformUpCtx(c TransformContext, s TransformSelector, f Transformer) (sql.Node, error) {
-	if o, ok := c.Node.(sql.OpaqueNode); ok && o.Opaque() {
-		return f(c)
-	}
-
-	children := c.Node.Children()
-	if len(children) == 0 {
-		return f(c)
-	}
-
-	childPrefix := append(sql.Schema{}, c.SchemaPrefix...)
-	newChildren := make([]sql.Node, len(children))
-	for i, child := range children {
-		cc := TransformContext{child, c.Node, i, childPrefix}
-		if s == nil || s(cc) {
-			var err error
-			child, err = transformUpCtx(cc, s, f)
-			if err != nil {
-				return nil, err
-			}
-		}
-		newChildren[i] = child
-		if child.Resolved() && childPrefix != nil {
-			cs := child.Schema()
-			childPrefix = append(childPrefix, cs...)
-		} else {
-			childPrefix = nil
-		}
-	}
-
-	node, err := c.Node.WithChildren(newChildren...)
-	if err != nil {
-		return nil, err
-	}
-
-	return f(TransformContext{node, c.Parent, c.ChildNum, c.SchemaPrefix})
-}
-
-// TransformUp applies a transformation function to the given tree from the
-// bottom up.
-func TransformUp(node sql.Node, f sql.TransformNodeFunc) (sql.Node, error) {
-	return TransformUpCtx(node, nil, func(c TransformContext) (sql.Node, error) {
-		return f(c.Node)
-	})
-}
-
-// TransformExpressionsUp applies a transformation function to all expressions
+// TransformExpressionsUpWithNode applies a transformation function to all expressions
 // on the given tree from the bottom up.
 func TransformExpressionsUpWithNode(node sql.Node, f expression.TransformExprWithNodeFunc) (sql.Node, error) {
-	return TransformUp(node, func(n sql.Node) (sql.Node, error) {
+	return TransformUp(node, func(n sql.Node) (sql.Node, bool, error) {
 		return TransformExpressionsWithNode(n, f)
 	})
 }
@@ -110,40 +65,272 @@ func TransformExpressionsUpWithNode(node sql.Node, f expression.TransformExprWit
 // TransformExpressionsUp applies a transformation function to all expressions
 // on the given tree from the bottom up.
 func TransformExpressionsUp(node sql.Node, f sql.TransformExprFunc) (sql.Node, error) {
-	return TransformExpressionsUpWithNode(node, func(n sql.Node, e sql.Expression) (sql.Expression, error) {
+	return TransformExpressionsUpWithNode(node, func(n sql.Node, e sql.Expression) (sql.Expression, bool, error) {
 		return f(e)
 	})
 }
 
-// TransformExpressions applies a transformation function to all expressions
+// TransformExpressionsWithNode applies a transformation function to all expressions
 // on the given node.
-func TransformExpressions(node sql.Node, f sql.TransformExprFunc) (sql.Node, error) {
-	return TransformExpressionsWithNode(node, func(n sql.Node, e sql.Expression) (sql.Expression, error) {
-		return f(e)
-	})
-}
-
-// TransformExpressions applies a transformation function to all expressions
-// on the given node.
-func TransformExpressionsWithNode(n sql.Node, f expression.TransformExprWithNodeFunc) (sql.Node, error) {
+func TransformExpressionsWithNode(n sql.Node, f expression.TransformExprWithNodeFunc) (sql.Node, bool, error) {
 	e, ok := n.(sql.Expressioner)
 	if !ok {
-		return n, nil
+		return n, false, nil
 	}
 
 	exprs := e.Expressions()
 	if len(exprs) == 0 {
-		return n, nil
+		return n, false, nil
 	}
 
-	newExprs := make([]sql.Expression, len(exprs))
+	var newExprs []sql.Expression
+	var mod bool
+	var err error
 	for i, e := range exprs {
-		e, err := expression.TransformUpWithNode(n, e, f)
+		e, mod, err = expression.TransformUpWithNode(n, e, f)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		newExprs[i] = e
+		if mod {
+			if newExprs == nil {
+				newExprs = make([]sql.Expression, len(exprs))
+				copy(newExprs, exprs)
+			}
+			newExprs[i] = e
+		}
 	}
 
-	return e.WithExpressions(newExprs...)
+	if len(newExprs) > 0 {
+		n, err = e.WithExpressions(newExprs...)
+		if err != nil {
+			return nil, false, err
+		}
+		return n, true, nil
+	}
+	return n, false, nil
+}
+
+// TransformExpressionsForNode applies a transformation function to all expressions
+// on the given node.
+func TransformExpressionsForNode(n sql.Node, f sql.TransformExprFunc) (sql.Node, bool, error) {
+	e, ok := n.(sql.Expressioner)
+	if !ok {
+		return n, false, nil
+	}
+
+	exprs := e.Expressions()
+	if len(exprs) == 0 {
+		return n, false, nil
+	}
+
+	var newExprs []sql.Expression
+	var modC bool
+	var err error
+	var expr sql.Expression
+	for i := 0; i < len(exprs); i++ {
+		expr = exprs[i]
+		expr, modC, err = expression.TransformUpHelper(expr, f)
+		if err != nil {
+			return nil, false, err
+		}
+		if modC {
+			if newExprs == nil {
+				newExprs = make([]sql.Expression, len(exprs))
+				copy(newExprs, exprs)
+			}
+			newExprs[i] = expr
+		}
+	}
+	if len(newExprs) > 0 {
+		n, err = e.WithExpressions(newExprs...)
+		if err != nil {
+			return nil, false, err
+		}
+		return n, true, nil
+	}
+	return n, false, nil
+}
+
+// TransformUpCtx transforms |n| from the bottom up, left to right, by passing
+// each node to |f|. If |s| is non-nil, does not descend into children where
+// |s| returns false.
+func TransformUpCtx(n sql.Node, s TransformSelector, f Transformer) (sql.Node, error) {
+	newn, mod, err := TransformUpCtxHelper(TransformContext{n, nil, -1, sql.Schema{}}, s, f)
+	if mod {
+		return newn, err
+	}
+	return n, err
+}
+
+func TransformUpCtxHelper(c TransformContext, s TransformSelector, f Transformer) (sql.Node, bool, error) {
+	node := c.Node
+	_, ok := node.(sql.OpaqueNode)
+	if ok {
+		return f(c)
+	}
+
+	children := node.Children()
+	if len(children) == 0 {
+		return f(c)
+	}
+
+	var (
+		newChildren []sql.Node
+		modC        bool
+		err         error
+		child       sql.Node
+		cc          TransformContext
+	)
+
+	for i := 0; i < len(children); i++ {
+		child = children[i]
+		cc = TransformContext{child, node, i, nil}
+		if s == nil || s(cc) {
+			child, modC, err = TransformUpCtxHelper(cc, s, f)
+			if err != nil {
+				return nil, false, err
+			}
+			if modC {
+				if newChildren == nil {
+					newChildren = make([]sql.Node, len(children))
+					copy(newChildren, children)
+				}
+				newChildren[i] = child
+			}
+		}
+	}
+
+	modC = len(newChildren) > 0
+	if modC {
+		node, err = node.WithChildren(newChildren...)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+
+	node, modN, err := f(TransformContext{node, c.Parent, c.ChildNum, c.SchemaPrefix})
+	if err != nil {
+		return nil, false, err
+	}
+	return node, modC || modN, nil
+}
+
+// TransformUpWithPrefixSchema transforms |n| from the bottom up, left to right, by passing
+// each node to |f|. If |s| is non-nil, does not descend into children where
+// |s| returns false.
+func TransformUpWithPrefixSchema(n sql.Node, s TransformSelector, f Transformer) (sql.Node, error) {
+	newn, mod, err := transformUpWithPrefixSchemaHelper(TransformContext{n, nil, -1, sql.Schema{}}, s, f)
+	if mod {
+		return newn, err
+	}
+	return n, err
+}
+
+func transformUpWithPrefixSchemaHelper(c TransformContext, s TransformSelector, f Transformer) (sql.Node, bool, error) {
+	node := c.Node
+	_, ok := node.(sql.OpaqueNode)
+	if ok {
+		return f(c)
+	}
+
+	children := node.Children()
+	if len(children) == 0 {
+		return f(c)
+	}
+
+	var newChildren []sql.Node
+	var mod bool
+	var err error
+	var child sql.Node
+	var cc TransformContext
+	childPrefix := append(sql.Schema{}, c.SchemaPrefix...)
+	for i := 0; i < len(children); i++ {
+		child = children[i]
+		cc = TransformContext{child, node, i, childPrefix}
+		if s == nil || s(cc) {
+			child, mod, err = transformUpWithPrefixSchemaHelper(cc, s, f)
+			if err != nil {
+				return nil, false, err
+			}
+			if mod {
+				if newChildren == nil {
+					newChildren = make([]sql.Node, len(children))
+					copy(newChildren, children)
+				}
+				newChildren[i] = child
+			}
+			if child.Resolved() && childPrefix != nil {
+				cs := child.Schema()
+				childPrefix = append(childPrefix, cs...)
+			} else {
+				childPrefix = nil
+			}
+		}
+	}
+
+	mod = len(newChildren) > 0
+	if mod {
+		node, err = node.WithChildren(newChildren...)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+
+	node, ok, err = f(TransformContext{node, c.Parent, c.ChildNum, c.SchemaPrefix})
+	if err != nil {
+		return nil, false, err
+	}
+	return node, mod || ok, nil
+}
+
+// TransformUp applies a transformation function to the given tree from the
+// bottom up.
+func TransformUp(node sql.Node, f sql.TransformNodeFunc) (sql.Node, error) {
+	newn, _, err := TransformUpHelper(node, f)
+	return newn, err
+}
+
+func TransformUpHelper(node sql.Node, f sql.TransformNodeFunc) (sql.Node, bool, error) {
+	_, ok := node.(sql.OpaqueNode)
+	if ok {
+		return f(node)
+	}
+
+	children := node.Children()
+	if len(children) == 0 {
+		return f(node)
+	}
+
+	var newChildren []sql.Node
+	var modC bool
+	var err error
+	var child sql.Node
+	for i := 0; i < len(children); i++ {
+		child = children[i]
+		child, modC, err = TransformUpHelper(child, f)
+		if err != nil {
+			return nil, false, err
+		}
+		if modC {
+			if newChildren == nil {
+				newChildren = make([]sql.Node, len(children))
+				copy(newChildren, children)
+			}
+			newChildren[i] = child
+		}
+	}
+
+	modC = len(newChildren) > 0
+	if modC {
+		node, err = node.WithChildren(newChildren...)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+
+	node, modN, err := f(node)
+	if err != nil {
+		return nil, false, err
+	}
+	return node, modC || modN, nil
 }

@@ -627,11 +627,11 @@ func (t *Table) addColumnToSchema(ctx *sql.Context, newCol *sql.Column, order *s
 		if i == newColIdx {
 			continue
 		}
-		newDefault, _ := expression.TransformUp(newSchCol.Default, func(expr sql.Expression) (sql.Expression, error) {
+		newDefault, _ := expression.TransformUp(newSchCol.Default, func(expr sql.Expression) (sql.Expression, bool, error) {
 			if expr, ok := expr.(*expression.GetField); ok {
-				return expr.WithIndex(newSch.IndexOf(expr.Name(), t.name)), nil
+				return expr.WithIndex(newSch.IndexOf(expr.Name(), t.name)), true, nil
 			}
-			return expr, nil
+			return expr, false, nil
 		})
 		newSchCol.Default = newDefault.(*sql.ColumnDefaultValue)
 	}

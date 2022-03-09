@@ -29,23 +29,23 @@ var (
 )
 
 func resolveGenerators(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.Node, error) {
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		p, ok := n.(*plan.Project)
 		if !ok {
-			return n, nil
+			return n, false, nil
 		}
 
 		projection := p.Projections
 
 		g, err := findGenerator(ctx, projection)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 
 		// There might be no generator in the project, in that case we don't
 		// have to do anything.
 		if g == nil {
-			return n, nil
+			return n, false, nil
 		}
 
 		projection[g.idx] = g.expr
@@ -60,7 +60,7 @@ func resolveGenerators(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) 
 		return plan.NewGenerate(
 			plan.NewProject(projection, p.Child),
 			expression.NewGetField(g.idx, g.expr.Type(), name, g.expr.IsNullable()),
-		), nil
+		), true, nil
 	})
 }
 

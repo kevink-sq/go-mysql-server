@@ -28,10 +28,10 @@ func resolveViews(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.
 	span, _ := ctx.Span("resolve_views")
 	defer span.Finish()
 
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		urt, ok := n.(*plan.UnresolvedTable)
 		if !ok {
-			return n, nil
+			return n, false, nil
 		}
 
 		viewName := urt.Name()
@@ -46,9 +46,9 @@ func resolveViews(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.
 			db, err := a.Catalog.Database(ctx, dbName)
 			if err != nil {
 				if sql.ErrDatabaseAccessDeniedForUser.Is(err) || sql.ErrTableAccessDeniedForUser.Is(err) {
-					return n, nil
+					return n, false, nil
 				}
-				return nil, err
+				return nil, false, err
 			}
 
 			maybeVdb := db
@@ -58,13 +58,13 @@ func resolveViews(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.
 			if vdb, ok := maybeVdb.(sql.ViewDatabase); ok {
 				viewDef, ok, err := vdb.GetView(ctx, viewName)
 				if err != nil {
-					return nil, err
+					return nil, false, err
 				}
 
 				if ok {
 					query, err := parse.Parse(ctx, viewDef)
 					if err != nil {
-						return nil, err
+						return nil, false, err
 					}
 
 					view = plan.NewSubqueryAlias(viewName, viewDef, query).AsView()
@@ -77,9 +77,9 @@ func resolveViews(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.
 		if view == nil {
 			view, err = ctx.GetViewRegistry().View(dbName, viewName)
 			if sql.ErrViewDoesNotExist.Is(err) {
-				return n, nil
+				return n, false, nil
 			} else if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 
@@ -91,7 +91,7 @@ func resolveViews(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.
 		if urt.AsOf != nil {
 			query, err = applyAsOfToView(query, a, urt.AsOf)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 
@@ -99,48 +99,60 @@ func resolveViews(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.
 		if urt.Database != "" {
 			query, err = applyDatabaseQualifierToView(query, a, urt.Database)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 
-		return view.Definition().WithChildren(query)
+		n, err = view.Definition().WithChildren(query)
+		if err != nil {
+			return nil, false, err
+		}
+		return n, true, nil
 	})
 }
 
 func applyAsOfToView(n sql.Node, a *Analyzer, asOf sql.Expression) (sql.Node, error) {
 	a.Log("applying AS OF clause to view definition")
 
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		urt, ok := n.(*plan.UnresolvedTable)
 		if !ok {
-			return n, nil
+			return n, false, nil
 		}
 
 		a.Log("applying AS OF clause to view " + urt.Name())
 		if urt.AsOf != nil {
-			return nil, sql.ErrIncompatibleAsOf.New(
+			return nil, false, sql.ErrIncompatibleAsOf.New(
 				fmt.Sprintf("cannot combine AS OF clauses %s and %s",
 					asOf.String(), urt.AsOf.String()))
 		}
 
-		return urt.WithAsOf(asOf)
+		n, err := urt.WithAsOf(asOf)
+		if err != nil {
+			return nil, false, err
+		}
+		return n, true, nil
 	})
 }
 
 func applyDatabaseQualifierToView(n sql.Node, a *Analyzer, dbName string) (sql.Node, error) {
 	a.Log("applying database qualifier to view definition")
 
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		urt, ok := n.(*plan.UnresolvedTable)
 		if !ok {
-			return n, nil
+			return n, false, nil
 		}
 
 		a.Log("applying database name to view table " + urt.Name())
 		if urt.Database == "" {
-			return urt.WithDatabase(dbName)
+			n, err := urt.WithDatabase(dbName)
+			if err != nil {
+				return nil, false, err
+			}
+			return n, true, nil
 		}
 
-		return n, nil
+		return n, false, nil
 	})
 }

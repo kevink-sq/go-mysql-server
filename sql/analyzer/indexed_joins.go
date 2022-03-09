@@ -55,33 +55,33 @@ func replaceJoinPlans(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (
 	var tableAliases TableAliases
 	var joinIndexes joinIndexesByTable
 	var oldJoin sql.Node
-	newJoin, err := plan.TransformUpCtx(n, selector, func(c plan.TransformContext) (sql.Node, error) {
+	newJoin, err := plan.TransformUpCtx(n, selector, func(c plan.TransformContext) (sql.Node, bool, error) {
 		switch n := c.Node.(type) {
 		case *plan.IndexedJoin:
-			return n, nil
+			return n, false, nil
 		case plan.JoinNode:
 			oldJoin = n
 
 			var err error
 			tableAliases, err = getTableAliases(n, scope)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 
 			joinIndexes, err = findJoinIndexesByTable(ctx, n, tableAliases, a)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 
 			// If we didn't identify a join condition for every table, we can't construct a join plan safely (we would be missing
 			// some tables / conditions)
 			if len(joinIndexes) != len(getTablesOrSubqueryAliases(n)) {
-				return n, nil
+				return n, false, nil
 			}
 
 			return replanJoin(ctx, n, a, joinIndexes, scope)
 		default:
-			return n, nil
+			return n, false, nil
 		}
 	})
 	if err != nil {
@@ -123,12 +123,12 @@ func wrapIndexedJoinForUpdateCases(node sql.Node, oldJoin sql.Node) (sql.Node, e
 	}
 
 	// Wrap the top level Indexed Join with a Project Node to preserve the original join schema.
-	updated, err := plan.TransformUpCtx(node, topLevelIndexedJoinSelector, func(c plan.TransformContext) (sql.Node, error) {
+	updated, err := plan.TransformUpCtx(node, topLevelIndexedJoinSelector, func(c plan.TransformContext) (sql.Node, bool, error) {
 		switch n := c.Node.(type) {
 		case *plan.IndexedJoin:
-			return plan.NewProject(expression.SchemaToGetFields(oldJoin.Schema()), n), nil
+			return plan.NewProject(expression.SchemaToGetFields(oldJoin.Schema()), n), true, nil
 		default:
-			return c.Node, nil
+			return c.Node, false, nil
 		}
 	})
 
@@ -159,7 +159,7 @@ func replaceTableAccessWithIndexedAccess(
 
 		if indexToApply.index != nil {
 			keyExprs := createIndexLookupKeyExpression(ctx, indexToApply, tableAliases)
-			keyExprs, err := FixFieldIndexesOnExpressions(ctx, scope, a, schema, keyExprs...)
+			keyExprs, _, err := FixFieldIndexesOnExpressions(ctx, scope, a, schema, keyExprs...)
 			if err != nil {
 				return nil, false, err
 			}
@@ -190,23 +190,15 @@ func replaceTableAccessWithIndexedAccess(
 			return node, false, nil
 		}
 
-		replaced := false
-		node, err := plan.TransformUp(node, func(node sql.Node) (sql.Node, error) {
+		return plan.TransformUpHelper(node, func(node sql.Node) (sql.Node, bool, error) {
 			switch node := node.(type) {
 			case *plan.ResolvedTable:
 				n, r, err := toIndexedTableAccess(node, indexToApply)
-				replaced = r
-				return n, err
+				return n, r, err
 			default:
-				return node, nil
+				return node, false, nil
 			}
 		})
-
-		if err != nil {
-			return nil, false, err
-		}
-
-		return node, replaced, nil
 	case *plan.IndexedJoin:
 		// Recurse the down the left side with the input schema
 		left, replacedLeft, err := replaceTableAccessWithIndexedAccess(ctx, node.Left(), a, schema, scope, joinIndexes, tableAliases)
@@ -229,7 +221,7 @@ func replaceTableAccessWithIndexedAccess(
 		}
 
 		// the condition's field indexes might need adjusting if the order of tables changed
-		cond, err := FixFieldIndexes(ctx, scope, a, append(schema, append(left.Schema(), right.Schema()...)...), node.Cond)
+		cond, _, err := FixFieldIndexes(ctx, scope, a, append(schema, append(left.Schema(), right.Schema()...)...), node.Cond)
 		if err != nil {
 			return nil, false, err
 		}
@@ -294,7 +286,7 @@ func replaceIndexedAccessInUnaryNode(
 
 	// For nodes that were above the join node, the field indexes might be wrong in the case that tables got reordered
 	// by join planning. So fix them.
-	newNode, err = FixFieldIndexesForExpressions(ctx, a, newNode, scope)
+	newNode, _, err = FixFieldIndexesForExpressions(ctx, a, newNode, scope)
 	if err != nil {
 		return nil, false, err
 	}
@@ -302,7 +294,7 @@ func replaceIndexedAccessInUnaryNode(
 	return newNode, replaced, nil
 }
 
-func replanJoin(ctx *sql.Context, node plan.JoinNode, a *Analyzer, joinIndexes joinIndexesByTable, scope *Scope) (sql.Node, error) {
+func replanJoin(ctx *sql.Context, node plan.JoinNode, a *Analyzer, joinIndexes joinIndexesByTable, scope *Scope) (sql.Node, bool, error) {
 	// Inspect the node for eligibility. The join planner rewrites the tree beneath this node, and for this to be correct
 	// only certain nodes can be below it.
 	eligible := true
@@ -323,7 +315,7 @@ func replanJoin(ctx *sql.Context, node plan.JoinNode, a *Analyzer, joinIndexes j
 	})
 
 	if !eligible {
-		return node, nil
+		return node, false, nil
 	}
 
 	joinHint := extractJoinHint(node)
@@ -337,14 +329,14 @@ func replanJoin(ctx *sql.Context, node plan.JoinNode, a *Analyzer, joinIndexes j
 		var err error
 		ordered, err = tableJoinOrder.applyJoinHint(joinHint)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
 	if !ordered {
 		err := tableJoinOrder.estimateCost(ctx, joinIndexes)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
@@ -353,13 +345,13 @@ func replanJoin(ctx *sql.Context, node plan.JoinNode, a *Analyzer, joinIndexes j
 
 	// This shouldn't happen, but better to fail gracefully if it does
 	if joinTree == nil {
-		return node, nil
+		return node, false, nil
 	}
 
 	tablesByName := byLowerCaseName(tableJoinOrder.tables())
 	joinNode := joinTreeToNodes(joinTree, tablesByName, scope)
 
-	return joinNode, nil
+	return joinNode, true, nil
 }
 
 func extractJoinHint(node plan.JoinNode) QueryHint {

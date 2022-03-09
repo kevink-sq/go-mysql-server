@@ -121,80 +121,88 @@ func loadChecks(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.No
 	span, _ := ctx.Span("loadChecks")
 	defer span.Finish()
 
-	return plan.TransformUp(n, func(n sql.Node) (sql.Node, error) {
+	return plan.TransformUp(n, func(n sql.Node) (sql.Node, bool, error) {
 		switch node := n.(type) {
 		case *plan.InsertInto:
 			nn := *node
 
 			rtable := getResolvedTable(nn.Destination)
 			if rtable == nil {
-				return node, nil
+				return node, false, nil
 			}
 
 			table, ok := rtable.Table.(sql.CheckTable)
 			if !ok {
-				return node, nil
+				return node, false, nil
 			}
 
 			var err error
 			nn.Checks, err = loadChecksFromTable(ctx, table)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
-
-			return &nn, nil
+			if len(nn.Checks) == 0 {
+				return node, false, nil
+			}
+			return &nn, true, nil
 		case *plan.Update:
 			nn := *node
 
 			rtable := getResolvedTable(nn.Child)
 			if rtable == nil {
-				return node, nil
+				return node, false, nil
 			}
 
 			table, ok := rtable.Table.(sql.CheckTable)
 			if !ok {
-				return node, nil
+				return node, false, nil
 			}
 
 			var err error
 			nn.Checks, err = loadChecksFromTable(ctx, table)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
-
-			return &nn, nil
+			if len(nn.Checks) == 0 {
+				return node, false, nil
+			}
+			return &nn, true, nil
 		case *plan.ShowCreateTable:
 			nn := *node
 
 			rtable := getResolvedTable(nn.Child)
 			if rtable == nil {
-				return node, nil
+				return node, false, nil
 			}
 
 			table, ok := rtable.Table.(sql.CheckTable)
 			if !ok {
-				return node, nil
+				return node, false, nil
 			}
 
 			var err error
 			checks, err := loadChecksFromTable(ctx, table)
 			if err != nil {
-				return nil, err
+				return nil, false, err
+			}
+
+			if len(checks) == 0 {
+				return node, false, nil
 			}
 
 			// To match MySQL output format, transform the column names and wrap with backticks
 			transformedChecks := make(sql.CheckConstraints, len(checks))
 			for i, check := range checks {
-				newExpr, err := expression.TransformUp(check.Expr, func(e sql.Expression) (sql.Expression, error) {
+				newExpr, err := expression.TransformUp(check.Expr, func(e sql.Expression) (sql.Expression, bool, error) {
 					if t, ok := e.(*expression.UnresolvedColumn); ok {
-						return expression.NewUnresolvedColumn(fmt.Sprintf("`%s`", t.Name())), nil
+						return expression.NewUnresolvedColumn(fmt.Sprintf("`%s`", t.Name())), true, nil
 					}
 
-					return e, nil
+					return e, false, nil
 				})
 
 				if err != nil {
-					return nil, err
+					return nil, false, err
 				}
 
 				check.Expr = newExpr
@@ -202,56 +210,64 @@ func loadChecks(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.No
 			}
 			nn.Checks = transformedChecks
 
-			return &nn, nil
+			return &nn, true, nil
 
 		case *plan.DropColumn:
 			nn := *node
 
 			rtable := getResolvedTable(nn.Child)
 			if rtable == nil {
-				return node, nil
+				return node, false, nil
 			}
 
 			table, ok := rtable.Table.(sql.CheckTable)
 			if !ok {
-				return node, nil
+				return node, false, nil
 			}
 
 			var err error
 			nn.Checks, err = loadChecksFromTable(ctx, table)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 
-			return &nn, nil
+			if len(nn.Checks) == 0 {
+				return node, false, nil
+			}
+
+			return &nn, true, nil
 
 		case *plan.RenameColumn:
 			nn := *node
 
 			rtable := getResolvedTable(nn.Child)
 			if rtable == nil {
-				return node, nil
+				return node, false, nil
 			}
 
 			table, ok := rtable.Table.(sql.CheckTable)
 			if !ok {
-				return node, nil
+				return node, false, nil
 			}
 
 			var err error
 			nn.Checks, err = loadChecksFromTable(ctx, table)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 
-			return &nn, nil
+			if len(nn.Checks) == 0 {
+				return node, false, nil
+			}
+
+			return &nn, true, nil
 
 		// TODO: ModifyColumn can also invalidate table check constraints (e.g. by changing the column's type).
 		//       Ideally, we should also load checks for ModifyColumn and error out if they would be invalidated.
 		// case *plan.ModifyColumn:
 
 		default:
-			return node, nil
+			return node, false, nil
 		}
 	})
 }

@@ -24,33 +24,35 @@ import (
 // a TopN node.
 func insertTopNNodes(ctx *sql.Context, a *Analyzer, n sql.Node, scope *Scope) (sql.Node, error) {
 	var updateCalcFoundRows bool
-	return plan.TransformUpCtx(n, nil, func(tc plan.TransformContext) (sql.Node, error) {
+	return plan.TransformUpCtx(n, nil, func(tc plan.TransformContext) (sql.Node, bool, error) {
 		if o, ok := tc.Node.(*plan.Offset); ok {
 			parentLimit, ok := tc.Parent.(*plan.Limit)
 			if !ok {
-				return tc.Node, nil
+				return tc.Node, false, nil
 			}
 			childSort, ok := o.UnaryNode.Child.(*plan.Sort)
 			if !ok {
-				return tc.Node, nil
+				return tc.Node, false, nil
 			}
 			topn := plan.NewTopN(childSort.SortFields, expression.NewPlus(parentLimit.Limit, o.Offset), childSort.UnaryNode.Child)
 			topn = topn.WithCalcFoundRows(parentLimit.CalcFoundRows)
 			updateCalcFoundRows = true
-			return o.WithChildren(topn)
+			node, err := o.WithChildren(topn)
+			return node, true, err
 		} else if l, ok := tc.Node.(*plan.Limit); ok {
 			childSort, ok := l.UnaryNode.Child.(*plan.Sort)
 			if !ok {
 				if updateCalcFoundRows {
 					updateCalcFoundRows = false
-					return l.WithCalcFoundRows(false), nil
+					return l.WithCalcFoundRows(false), true, nil
 				}
-				return tc.Node, nil
+				return tc.Node, false, nil
 			}
 			topn := plan.NewTopN(childSort.SortFields, l.Limit, childSort.UnaryNode.Child)
 			topn = topn.WithCalcFoundRows(l.CalcFoundRows)
-			return l.WithCalcFoundRows(false).WithChildren(topn)
+			node, err := l.WithCalcFoundRows(false).WithChildren(topn)
+			return node, true, err
 		}
-		return tc.Node, nil
+		return tc.Node, false, nil
 	})
 }

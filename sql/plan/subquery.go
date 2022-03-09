@@ -212,16 +212,16 @@ func (s *Subquery) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 // prependRowInPlan returns a transformation function that prepends the row given to any row source in a query
 // plan. Any source of rows, as well as any node that alters the schema of its children, will be wrapped so that its
 // result rows are prepended with the row given.
-func prependRowInPlan(row sql.Row) func(n sql.Node) (sql.Node, error) {
-	return func(n sql.Node) (sql.Node, error) {
+func prependRowInPlan(row sql.Row) func(n sql.Node) (sql.Node, bool, error) {
+	return func(n sql.Node) (sql.Node, bool, error) {
 		switch n := n.(type) {
 		case *Project, *GroupBy, *Having, *SubqueryAlias, *Window, sql.Table, *ValueDerivedTable, *Union:
 			return &prependNode{
 				UnaryNode: UnaryNode{Child: n},
 				row:       row,
-			}, nil
+			}, true, nil
 		default:
-			return n, nil
+			return n, false, nil
 		}
 	}
 }
