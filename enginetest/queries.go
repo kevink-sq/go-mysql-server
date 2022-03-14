@@ -7598,6 +7598,238 @@ var InfoSchemaQueries = []QueryTest{
 			{"ascii_general_ci", "ascii"},
 		},
 	},
+	{
+		Query:    `SELECT * from information_schema.administrable_role_authorizations`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.applicable_roles`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.column_privileges`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.columns_extensions`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.connection_control_failed_login_attempts`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.keywords`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.mysql_firewall_users`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.mysql_firewall_whitelist`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.optimizer_trace`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.plugins`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.profiling`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.resource_groups`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.role_column_grants`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.role_routine_grants`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.schema_privileges`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.schemata_extensions`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.st_geometry_columns`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.st_spatial_reference_systems`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.st_units_of_measure`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.table_constraints_extensions`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.table_privileges`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.tables_extensions`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.tablespaces`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.tablespaces_extensions`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.user_attributes`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.view_routine_usage`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * FROM information_schema.view_table_usage`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_buffer_page`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_buffer_page_lru`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_buffer_pool_stats`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_cached_indexes`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_cmp`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_cmp_reset`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_cmpmem`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_cmpmem_reset`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_cmp_per_index`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_cmp_per_index_reset`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_columns`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_datafiles`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_fields`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_foreign`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_foreign_cols`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_ft_being_deleted`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_ft_config`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_ft_default_stopword`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_ft_deleted`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_ft_index_cache`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_ft_index_table`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_indexes`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_metrics`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_session_temp_tablespaces`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_tables`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_tablespaces`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_tablespaces_brief`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_tablestats`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_temp_table_info`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_trx`,
+		Expected: []sql.Row{},
+	},
+	{
+		Query:    `SELECT * from information_schema.innodb_virtual`,
+		Expected: []sql.Row{},
+	},
 }
 
 var InfoSchemaScripts = []ScriptTest{
