@@ -989,7 +989,7 @@ var systemVars = map[string]SystemVariable{
 	"innodb_stats_auto_recalc": {
 		Name:              "inmemory_joins",
 		Scope:             SystemVariableScope_Global,
-		Dynamic:           false,
+		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              NewSystemBoolType("innodb_stats_auto_recalc"),
 		Default:           int8(1),
